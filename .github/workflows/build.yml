@@ -96,9 +96,19 @@ jobs:
           security create-keychain -p "$KP" "$KC"
           security set-keychain-settings -lut 21600 "$KC"
           security unlock-keychain -p "$KP" "$KC"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          [ -n "${APPLE_CERTIFICATE:-}" ] \
+            || { echo "::error::APPLE_CERTIFICATE secret is empty"; exit 1; }
+          # macOS's base64 uses -D for decode. Remove formatting whitespace so
+          # secrets copied from wrapped base64 output are accepted consistently.
+          printf '%s' "$APPLE_CERTIFICATE" | tr -d '[:space:]' \
+            | base64 -D > "$RUNNER_TEMP/cert.p12"
+          [ -s "$RUNNER_TEMP/cert.p12" ] \
+            || { echo "::error::APPLE_CERTIFICATE did not decode to a non-empty .p12"; exit 1; }
           security import "$RUNNER_TEMP/cert.p12" -k "$KC" \
             -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security find-identity -v -p codesigning "$KC" \
+            | grep -q 'Developer ID Application' \
+            || { echo "::error::imported keychain has no Developer ID Application identity; use a password-protected .p12 containing the private key"; exit 1; }
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KP" "$KC"
           # Prepend the ephemeral keychain to the existing user search list,
           # reading each path space-safely. NB the macos-14 runner ships bash 3.2
