@@ -25,6 +25,11 @@ on:
           Pass "[]" to build nothing (the job is skipped).
         required: true
         type: string
+      sign_macos:
+        description: "Sign and notarize the macOS bundle with Apple Developer credentials"
+        required: false
+        default: false
+        type: boolean
 
 # The build only checkouts + builds + uploads artifacts; no release write. The
 # effective token is the caller∩callee intersection, so this read floor is safe
@@ -83,7 +88,7 @@ jobs:
       # the App Store Connect API key. Absolute paths, so working-directory: .
       # (the job default is apps/yerd-gui). No-op on the Linux leg.
       - name: Set up macOS signing
-        if: matrix.kind == 'gui' && runner.os == 'macOS'
+        if: matrix.kind == 'gui' && runner.os == 'macOS' && inputs.sign_macos
         working-directory: .
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -168,10 +173,10 @@ jobs:
       - name: Build Tauri bundles (signed + notarised on macOS)
         if: matrix.kind == 'gui'
         env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+          APPLE_SIGNING_IDENTITY: ${{ inputs.sign_macos && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ inputs.sign_macos && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ inputs.sign_macos && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_PATH: ${{ inputs.sign_macos && env.APPLE_API_KEY_PATH || '' }}
         # Each platform applies its release overlay (externalBin + macOS plist /
         # Linux deb postinst). `--config` is resolved relative to the cwd
         # (apps/yerd-gui), so the path is src-tauri-relative.
@@ -191,14 +196,14 @@ jobs:
       - name: Build styled macOS .dmg (appdmg, no Finder/AppleScript)
         if: matrix.kind == 'gui' && runner.os == 'macOS'
         env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ inputs.sign_macos && secrets.APPLE_SIGNING_IDENTITY || '' }}
         run: bash ./scripts/build-macos-dmg.sh
 
       # Fail-closed: prove the .app is Developer-ID signed with Hardened Runtime,
       # stapled, and Gatekeeper-accepted. The launch test catches entitlement
       # gaps (they crash at runtime, not at notarisation).
       - name: Verify macOS signing
-        if: matrix.kind == 'gui' && runner.os == 'macOS'
+        if: matrix.kind == 'gui' && runner.os == 'macOS' && inputs.sign_macos
         working-directory: .
         run: |
           set -euo pipefail
@@ -346,6 +351,45 @@ jobs:
             echo "::warning::App exited early (exit $code) with no signing error — likely headless/single-instance:"; cat /tmp/app.log
           fi
 
+      - name: Verify unsigned macOS Universal bundle
+        if: matrix.kind == 'gui' && runner.os == 'macOS' && !inputs.sign_macos
+        working-directory: .
+        run: |
+          set -euo pipefail
+          source apps/yerd-gui/scripts/lib/find-app.sh
+          build_roots target apps/yerd-gui/src-tauri/target
+          APP=$(find_yerd_app)
+          DMG=$(find "${ROOTS[@]}" -name '*.dmg' -type f 2>/dev/null | head -n1 || true)
+          [ -n "$APP" ] || { echo "::error::Yerd.app not found"; exit 1; }
+          [ -n "$DMG" ] || { echo "::error::macOS DMG not found"; exit 1; }
+          require_universal() {
+            local archs
+            archs=$(lipo -archs "$1" 2>/dev/null || true)
+            case " $archs " in
+              *" x86_64 "*) case " $archs " in *" arm64 "*) ;; *) echo "::error::$2 missing arm64 slice"; exit 1 ;; esac ;;
+              *) echo "::error::$2 missing x86_64 slice"; exit 1 ;;
+            esac
+          }
+          MAIN_EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")
+          require_universal "$APP/Contents/MacOS/$MAIN_EXE" "main binary $MAIN_EXE"
+          for b in yerd yerdd yerd-helper; do
+            [ -f "$APP/Contents/MacOS/$b" ] || { echo "::error::missing bundled binary $b"; exit 1; }
+            require_universal "$APP/Contents/MacOS/$b" "$b"
+          done
+          MP=$(mktemp -d)
+          trap 'hdiutil detach -quiet "$MP" 2>/dev/null || true' EXIT
+          hdiutil attach -nobrowse -quiet -mountpoint "$MP" "$DMG"
+          DMG_APP=$(find "$MP" -maxdepth 1 -name 'Yerd.app' -type d | head -n1)
+          [ -n "$DMG_APP" ] || { echo "::error::DMG does not contain Yerd.app"; exit 1; }
+          DMG_MAIN_EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$DMG_APP/Contents/Info.plist")
+          require_universal "$DMG_APP/Contents/MacOS/$DMG_MAIN_EXE" "DMG main binary $DMG_MAIN_EXE"
+          for b in yerd yerdd yerd-helper; do
+            require_universal "$DMG_APP/Contents/MacOS/$b" "DMG $b"
+          done
+          hdiutil detach -quiet "$MP" || true
+          trap - EXIT
+          echo "Unsigned Universal macOS app and DMG verified; Apple notarization intentionally skipped"
+
       # Self-update artifact: a gzip'd tar of the signed+stapled .app that the
       # in-app/`yerd update` applier swaps into /Applications. The bundle is
       # Universal 2, so one updater artifact serves both macOS architectures. The mandatory gate below
@@ -354,7 +398,7 @@ jobs:
       # tar round-trip. If a future macOS drops the staple through tar, switch the
       # packaging to `ditto`/zip — the gate will catch it before publish.
       - name: Package + verify macOS .app.tar.gz updater artifact
-        if: matrix.kind == 'gui' && runner.os == 'macOS'
+        if: matrix.kind == 'gui' && runner.os == 'macOS' && inputs.sign_macos
         working-directory: .
         run: |
           set -euo pipefail
@@ -381,6 +425,27 @@ jobs:
             || { echo "::error::extracted .app has no Team ID"; exit 1; }
           rm -rf "$TMP"
           echo "Packaged + verified $OUT"
+
+      - name: Package macOS .app.tar.gz updater artifact (unsigned)
+        if: matrix.kind == 'gui' && runner.os == 'macOS' && !inputs.sign_macos
+        working-directory: .
+        run: |
+          set -euo pipefail
+          source apps/yerd-gui/scripts/lib/find-app.sh
+          build_roots target apps/yerd-gui/src-tauri/target
+          APP=$(find_yerd_app)
+          [ -n "$APP" ] || { echo "::error::Yerd.app not found for tarball packaging"; exit 1; }
+          OUT_DIR="apps/yerd-gui/src-tauri/target/release/bundle/updater"
+          mkdir -p "$OUT_DIR"
+          OUT="$OUT_DIR/Yerd_MacOS_AppleSilicon.app.tar.gz"
+          ( cd "$(dirname "$APP")" && /usr/bin/tar -czpf - "$(basename "$APP")" ) > "$OUT"
+          TMP=$(mktemp -d)
+          trap 'rm -rf "$TMP"' EXIT
+          /usr/bin/tar -xpf "$OUT" -C "$TMP"
+          EXAPP="$TMP/$(basename "$APP")"
+          [ -x "$EXAPP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$EXAPP/Contents/Info.plist")" ] \
+            || { echo "::error::unsigned extracted app has no executable"; exit 1; }
+          echo "Packaged unsigned Universal macOS updater artifact: $OUT"
 
       # The GUI .deb must EMBED the three binaries (daemon + CLI + helper) and the
       # postinst that setcaps yerdd. Tauri's deb bundler copies externalBin

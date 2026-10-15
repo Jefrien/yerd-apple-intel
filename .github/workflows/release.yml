@@ -49,6 +49,7 @@ jobs:
         [
           {"id":"macos","runner":"macos-14","container":"","kind":"gui"}
         ]
+      sign_macos: false
     secrets: inherit
 
   # The ONLY job that touches the release. Assemble everything, create it as a
