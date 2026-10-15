@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       macos:
-        description: "macOS (Apple Silicon) — .dmg / .app.tar.gz"
+        description: "macOS Universal (Intel + Apple Silicon) — .dmg / .app.tar.gz"
         type: boolean
         default: true
       linux_x64:
@@ -178,6 +178,7 @@ jobs:
             esac
             case "$f" in
               *AppleSilicon*|*aarch64*|*arm64*) [ "$os" = "MacOS" ] && arch="AppleSilicon" || arch="Arm64" ;;
+              *[Uu]niversal*)   arch="Universal" ;;
               *x86_64*|*amd64*)  arch="x86_64" ;;
               *) arch="unknown" ;;
             esac
