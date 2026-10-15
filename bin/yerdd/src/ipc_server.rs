@@ -5228,6 +5228,7 @@ Subject: Captured\r\n\r\nhi\r\n";
         if !matches!(
             yerd_update::Platform::current(),
             yerd_update::Platform::MacOsAarch64
+                | yerd_update::Platform::MacOsX86_64
                 | yerd_update::Platform::LinuxX86_64
                 | yerd_update::Platform::LinuxAarch64
         ) {
@@ -5295,6 +5296,9 @@ Subject: Captured\r\n\r\nhi\r\n";
                     (yerd_update::Platform::MacOsAarch64, _) => {
                         (yerd_ipc::StagedArtifact::AppTarGz, mac)
                     }
+                    (yerd_update::Platform::MacOsX86_64, _) => {
+                        (yerd_ipc::StagedArtifact::AppTarGz, mac)
+                    }
                     (yerd_update::Platform::LinuxX86_64, yerd_update::PkgFormat::Deb) => {
                         (yerd_ipc::StagedArtifact::Deb, deb)
                     }
@@ -5334,6 +5338,7 @@ Subject: Captured\r\n\r\nhi\r\n";
         if !matches!(
             yerd_update::Platform::current(),
             yerd_update::Platform::MacOsAarch64
+                | yerd_update::Platform::MacOsX86_64
                 | yerd_update::Platform::LinuxX86_64
                 | yerd_update::Platform::LinuxAarch64
         ) {
@@ -5396,6 +5401,7 @@ Subject: Captured\r\n\r\nhi\r\n";
         if !matches!(
             yerd_update::Platform::current(),
             yerd_update::Platform::MacOsAarch64
+                | yerd_update::Platform::MacOsX86_64
                 | yerd_update::Platform::LinuxX86_64
                 | yerd_update::Platform::LinuxAarch64
         ) {

@@ -24,7 +24,7 @@ hero:
     - theme: alt
       text: View on GitHub
       link: https://github.com/forjedio/yerd
-  platforms: macOS (Apple Silicon) · Debian · Ubuntu · Arch · Fedora
+  platforms: macOS (Universal: Intel + Apple Silicon) · Debian · Ubuntu · Arch · Fedora
   shot:
     light: /images/overview-light.png
     dark: /images/overview-dark.png

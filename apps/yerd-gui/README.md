@@ -80,15 +80,21 @@ staged sidecars):
 # 1) Build the three binaries and stage them as Tauri sidecars (git-ignored dir).
 cargo build --release -p yerd -p yerdd -p yerd-helper
 mkdir -p src-tauri/binaries
-# macOS:
+# macOS Universal 2: build both Rust slices and fuse each sidecar.
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+for target in aarch64-apple-darwin x86_64-apple-darwin; do
+  cargo build --release --target "$target" -p yerd -p yerdd -p yerd-helper
+done
 for b in yerd yerdd yerd-helper; do
-  cp ../../target/release/$b src-tauri/binaries/$b-aarch64-apple-darwin
+  lipo -create -output "src-tauri/binaries/$b-universal-apple-darwin" \
+    "../../target/aarch64-apple-darwin/release/$b" \
+    "../../target/x86_64-apple-darwin/release/$b"
 done
 # Linux: use the -x86_64-unknown-linux-gnu suffix instead.
 
 # 2) Build with the platform overlay (externalBin + macOS plist / Linux postinst).
 #    `--config` is resolved relative to this dir, so the path is src-tauri/-relative.
-npm run tauri build -- --config src-tauri/tauri.bundle-macos.conf.json   # macOS
+npm run tauri build -- --target universal-apple-darwin --config src-tauri/tauri.bundle-macos.conf.json   # macOS
 # npm run tauri build -- --config src-tauri/tauri.bundle-linux.conf.json # Linux
 
 # 3) macOS only: package the styled .dmg (headless - no Finder/AppleScript).

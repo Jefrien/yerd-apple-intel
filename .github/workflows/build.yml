@@ -116,9 +116,10 @@ jobs:
       # inside gates correctly. APPLE_CERTIFICATE is deliberately NOT passed: the
       # cert is already in the keychain from the step above, and passing it would
       # make Tauri spin up its own keychain and conflict. Unset/ignored on Linux.
-      # Build the embedded binaries (daemon + CLI + helper) natively and stage
-      # them as Tauri externalBin sidecars (`name-<triple>`). Native build shares
-      # the rust-cache; the triple suffix is only Tauri's sidecar naming.
+      # Build the embedded binaries (daemon + CLI + helper) and stage them as
+      # Tauri externalBin sidecars (`name-<triple>`). macOS is Universal 2:
+      # Tauri combines its main binary, but sidecars must be built for both
+      # Apple targets and fused here because Tauri does not lipo externalBin.
       - name: Stage embedded binaries (externalBin)
         if: matrix.kind == 'gui'
         working-directory: .
@@ -132,18 +133,27 @@ jobs:
           [ "$fmt" = "deb" ] \
             || { echo "::error::bundle yerdd --pkg-format=$fmt (expected deb); the pacman feature leaked into the GUI bundle build"; exit 1; }
           mkdir -p apps/yerd-gui/src-tauri/binaries
-          # Native build per runner — the triple suffix is only Tauri's sidecar
-          # naming, so it must match the arch cargo actually produced.
           if [ "$RUNNER_OS" = "macOS" ]; then
-            triple=aarch64-apple-darwin
-          elif [ "$(uname -m)" = "aarch64" ]; then
-            triple=aarch64-unknown-linux-gnu
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+            cargo build --release --target aarch64-apple-darwin -p yerd -p yerdd -p yerd-helper
+            cargo build --release --target x86_64-apple-darwin -p yerd -p yerdd -p yerd-helper
+            for b in yerd yerdd yerd-helper; do
+              lipo -create -output "apps/yerd-gui/src-tauri/binaries/$b-universal-apple-darwin" \
+                "target/aarch64-apple-darwin/release/$b" \
+                "target/x86_64-apple-darwin/release/$b"
+              lipo -info "apps/yerd-gui/src-tauri/binaries/$b-universal-apple-darwin"
+            done
           else
-            triple=x86_64-unknown-linux-gnu
+            cargo build --release -p yerd -p yerdd -p yerd-helper
+            if [ "$(uname -m)" = "aarch64" ]; then
+              triple=aarch64-unknown-linux-gnu
+            else
+              triple=x86_64-unknown-linux-gnu
+            fi
+            for b in yerd yerdd yerd-helper; do
+              cp "target/release/$b" "apps/yerd-gui/src-tauri/binaries/$b-$triple"
+            done
           fi
-          for b in yerd yerdd yerd-helper; do
-            cp "target/release/$b" "apps/yerd-gui/src-tauri/binaries/$b-$triple"
-          done
 
       - name: Build Tauri bundles (signed + notarised on macOS)
         if: matrix.kind == 'gui'
@@ -157,7 +167,7 @@ jobs:
         # (apps/yerd-gui), so the path is src-tauri-relative.
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
-            npm run tauri build -- --config src-tauri/tauri.bundle-macos.conf.json
+            npm run tauri build -- --target universal-apple-darwin --config src-tauri/tauri.bundle-macos.conf.json
           else
             npm run tauri build -- --config src-tauri/tauri.bundle-linux.conf.json
           fi
@@ -196,6 +206,17 @@ jobs:
           [ -n "$APP" ] || { echo "::error::Yerd.app not found under ${ROOTS[*]} (is \"app\" in tauri.conf.json bundle.targets?)"; exit 1; }
           [ -n "$DMG" ] || { echo "::error::no .dmg found under ${ROOTS[*]}"; exit 1; }
           echo "Verifying $APP and $DMG"
+          require_universal() {
+            local archs
+            archs=$(lipo -archs "$1" 2>/dev/null || true)
+            case " $archs " in
+              *" x86_64 "*) case " $archs " in
+                *" arm64 "*) ;;
+                *) echo "::error::$2 missing arm64 slice (lipo -archs: '$archs')"; exit 1 ;;
+              esac ;;
+              *) echo "::error::$2 missing x86_64 slice (lipo -archs: '$archs')"; exit 1 ;;
+            esac
+          }
           codesign --verify --strict --verbose=2 "$APP"
           codesign -dv --verbose=4 "$APP" > /tmp/cs.txt 2>&1
           grep -q "Authority=Developer ID Application" /tmp/cs.txt
@@ -220,6 +241,7 @@ jobs:
           for b in yerd yerdd yerd-helper; do
             BIN="$APP/Contents/MacOS/$b"
             [ -f "$BIN" ] || { echo "::error::missing bundled binary $BIN"; exit 1; }
+            require_universal "$BIN" "$b"
             # Developer-ID signed, Hardened Runtime, timestamped, same team as the
             # app (SMAppService trusts the daemon by matching Team ID).
             codesign --verify --strict --verbose=2 "$BIN"
@@ -249,6 +271,9 @@ jobs:
           done
           echo "Embedded binaries + LaunchAgent: present, sealed, Developer-ID, team-matched, entitlement-clean, exec OK"
 
+          MAIN_EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")
+          require_universal "$APP/Contents/MacOS/$MAIN_EXE" "main binary $MAIN_EXE"
+
           # The .dmg is Developer-ID signed but deliberately NOT notarized/stapled:
           # Tauri only submits the inner .app to notarytool, never the disk image,
           # so no ticket exists for the dmg's own cdhash. `stapler validate` fails
@@ -265,6 +290,7 @@ jobs:
           # embedded daemon + agent plist — guards against a stale .app in the dmg.
           MP=$(mktemp -d)
           hdiutil attach -nobrowse -quiet -mountpoint "$MP" "$DMG"
+          trap 'hdiutil detach -quiet "$MP" 2>/dev/null || true' EXIT
           DMG_APP=$(find "$MP" -maxdepth 1 -name 'Yerd.app' -type d | head -n1)
           miss=""
           for b in yerd yerdd yerd-helper; do
@@ -273,9 +299,15 @@ jobs:
           [ -f "$DMG_APP/Contents/Library/LaunchAgents/dev.yerd.daemon.plist" ] || miss="$miss plist"
           if [ -n "$miss" ]; then
             echo "::error::shipped DMG is missing:$miss"
-            hdiutil detach -quiet "$MP" || true; exit 1
+            exit 1
           fi
+          DMG_MAIN_EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$DMG_APP/Contents/Info.plist")
+          require_universal "$DMG_APP/Contents/MacOS/$DMG_MAIN_EXE" "shipped DMG main binary $DMG_MAIN_EXE"
+          for b in yerd yerdd yerd-helper; do
+            require_universal "$DMG_APP/Contents/MacOS/$b" "shipped DMG $b"
+          done
           hdiutil detach -quiet "$MP" || true
+          trap - EXIT
           echo "Shipped DMG carries the embedded binaries + LaunchAgent — OK"
           # Launch test: a Hardened-Runtime/AMFI kill is SIGKILL (exit 137) and may
           # leave nothing in the app's own log, so also check the exit signal and
@@ -305,8 +337,8 @@ jobs:
           fi
 
       # Self-update artifact: a gzip'd tar of the signed+stapled .app that the
-      # in-app/`yerd update` applier swaps into /Applications. Apple-Silicon only
-      # (the build matrix produces no Intel .app). The mandatory gate below
+      # in-app/`yerd update` applier swaps into /Applications. The bundle is
+      # Universal 2, so one updater artifact serves both macOS architectures. The mandatory gate below
       # extracts into a FRESH dir and re-asserts codesign + staple + OFFLINE
       # Gatekeeper assessment + a Team ID, proving the notarization survives the
       # tar round-trip. If a future macOS drops the staple through tar, switch the
@@ -322,7 +354,8 @@ jobs:
           [ -n "$APP" ] || { echo "::error::Yerd.app not found for tarball packaging"; exit 1; }
           OUT_DIR="apps/yerd-gui/src-tauri/target/release/bundle/updater"
           mkdir -p "$OUT_DIR"
-          # Apple-Silicon only; the publish/upload job appends the version to this name.
+          # Keep the legacy token so pre-Universal arm64 clients can still find
+          # this updater artifact; the bytes are Universal 2.
           OUT="$OUT_DIR/Yerd_MacOS_AppleSilicon.app.tar.gz"
           # bsdtar (macOS /usr/bin/tar) preserving permissions; the applier extracts
           # with the same bsdtar via `tar -xpf`.
@@ -562,8 +595,10 @@ jobs:
           path: |
             target/release/bundle/**/*.deb
             target/release/bundle/**/*.dmg
+            target/universal-apple-darwin/release/bundle/**/*.dmg
             apps/yerd-gui/src-tauri/target/release/bundle/**/*.deb
             apps/yerd-gui/src-tauri/target/release/bundle/**/*.dmg
+            apps/yerd-gui/src-tauri/target/universal-apple-darwin/release/bundle/**/*.dmg
             apps/yerd-gui/src-tauri/target/release/bundle/updater/*.app.tar.gz
             arch-out/*.pkg.tar.zst
             fedora-out/*.rpm

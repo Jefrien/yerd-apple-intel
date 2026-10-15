@@ -68,11 +68,11 @@ silently failing.
 
 | Platform | Install mechanism |
 | --- | --- |
-| macOS (Apple Silicon) | Extracts the `.app.tar.gz`, swaps it into `/Applications`, restarts the daemon via `launchctl kickstart -k`. |
+| macOS (Universal: Intel + Apple Silicon) | Extracts the `.app.tar.gz`, swaps it into `/Applications`, restarts the daemon via `launchctl kickstart -k`. |
 | Linux (`.deb` build) | Reinstalls via `dpkg -i`, elevated with `pkexec` if needed; restarts the daemon via `systemctl --user restart` (or a stop/start fallback with no systemd user instance). |
 | Linux (Arch `.pkg.tar.zst` build) | Reinstalls via `pacman -U`, same elevation and restart path as the `.deb` build. |
 | Linux (Fedora `.rpm` build) | Reinstalls via `rpm -U --oldpackage`, same elevation and restart path as the `.deb` build. |
-| Intel macOS, other platforms | No self-update artifact is published; `yerd update` reports nothing available. |
+| Other unsupported platforms | No self-update artifact is published; `yerd update` reports nothing available. |
 
 ## See also
 

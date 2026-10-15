@@ -136,7 +136,7 @@ jobs:
           # Drop the now-redundant nested dirs so `dist/*` is files-only.
           find . -mindepth 1 -type d -exec rm -rf {} +
           # Human-friendly release asset names:
-          #   Yerd_<OS>_<Arch>_v<version>.<ext>   (e.g. Yerd_MacOS_AppleSilicon_v2-0-2-rc-3.dmg)
+          #   Yerd_<OS>_<Arch>_v<version>.<ext>   (e.g. Yerd_MacOS_Universal_v2-0-2-rc-3.dmg)
           # Tauri emits Yerd_<ver>_<arch>.deb (the macOS .dmg is built by
           # scripts/build-macos-dmg.sh, matching the same naming); the .app.tar.gz is already
           # Yerd_MacOS_AppleSilicon.app.tar.gz; the arch job emits
@@ -157,6 +157,7 @@ jobs:
             esac
             case "$f" in
               *AppleSilicon*|*aarch64*|*arm64*) [ "$os" = "MacOS" ] && arch="AppleSilicon" || arch="Arm64" ;;
+              *[Uu]niversal*)   arch="Universal" ;;
               *x86_64*|*amd64*)  arch="x86_64" ;;
               *) arch="unknown" ;;
             esac

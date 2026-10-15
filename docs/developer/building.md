@@ -277,7 +277,10 @@ The trait-fake design means most tests pass on either OS regardless of which
 host you're on - which can *hide* a bug that only the real per-OS implementation
 would surface. When you change OS-specific code under `yerd-platform`, run the
 suite on the affected platform, not just your own. CI runs the full gate on both
-`ubuntu-22.04` and `macos-14` (Apple Silicon) for exactly this reason.
+`ubuntu-22.04` and `macos-14` (Apple Silicon) for exactly this reason. The
+macOS release bundle is Universal 2; its Intel slice is cross-compiled and
+checked with `lipo -archs`, so architecture-sensitive changes should also be
+tested on Intel or under Rosetta.
 :::
 
 ## The CI gate (run this before pushing)

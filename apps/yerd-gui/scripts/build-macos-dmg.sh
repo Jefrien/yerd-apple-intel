@@ -13,6 +13,7 @@
 #
 # Usage: ./build-macos-dmg.sh
 # Env:   APPLE_SIGNING_IDENTITY (optional) — codesigns the dmg if set;
+#        The input app is expected to be Universal 2 on release builds.
 #        without it, produces an unsigned dmg for local testing.
 set -euo pipefail
 
@@ -35,7 +36,7 @@ OUT_DIR="$BUNDLE_DIR/dmg"
 mkdir -p "$OUT_DIR"
 
 VERSION=$(TAURI_CONF="$GUI_DIR/src-tauri/tauri.conf.json" node -p "require(process.env.TAURI_CONF).version")
-OUT="$OUT_DIR/Yerd_${VERSION}_aarch64.dmg"
+OUT="$OUT_DIR/Yerd_${VERSION}_universal.dmg"
 
 # A real temp dir (not mktemp-plus-string-concat, which orphans the original
 # mktemp file) with a trap so it's cleaned up on every exit path, including
